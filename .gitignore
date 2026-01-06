@@ -16,6 +16,10 @@ ENV/
 
 # ChromaDB
 backend/chroma_db/
+chroma_db/
+
+# Claude Code
+.claude/
 
 # Uploads
 uploads/
