@@ -167,5 +167,220 @@ class TestSearchToolIntegration:
             pytest.fail(f"Search tool crashed: {type(e).__name__}: {e}")
 
 
+class TestCourseOutlineTool:
+    """Test course outline tool functionality"""
+
+    @pytest.fixture
+    def vector_store_with_course(self, tmp_path):
+        """Create a test vector store with a sample course"""
+        from vector_store import VectorStore
+        from models import Course, Lesson
+        from config import config
+
+        store = VectorStore(
+            chroma_path=str(tmp_path / "test_chroma"),
+            embedding_model=config.EMBEDDING_MODEL,
+            max_results=config.MAX_RESULTS
+        )
+
+        # Add a test course
+        test_course = Course(
+            title="Test Course",
+            course_link="https://example.com/course",
+            instructor="Test Instructor",
+            lessons=[
+                Lesson(lesson_number=0, title="Introduction", lesson_link="https://example.com/lesson0"),
+                Lesson(lesson_number=1, title="Getting Started", lesson_link="https://example.com/lesson1"),
+                Lesson(lesson_number=2, title="Advanced Topics", lesson_link="https://example.com/lesson2")
+            ]
+        )
+        store.add_course_metadata(test_course)
+
+        return store
+
+    @pytest.fixture
+    def outline_tool(self, vector_store_with_course):
+        """Create outline tool with test vector store"""
+        from search_tools import CourseOutlineTool
+        return CourseOutlineTool(vector_store_with_course)
+
+    def test_outline_tool_definition(self):
+        """Test outline tool has correct schema"""
+        from vector_store import VectorStore
+        from search_tools import CourseOutlineTool
+        from config import config
+        import tempfile
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            store = VectorStore(
+                chroma_path=os.path.join(tmp_dir, "test_chroma"),
+                embedding_model=config.EMBEDDING_MODEL,
+                max_results=config.MAX_RESULTS
+            )
+            tool = CourseOutlineTool(store)
+            definition = tool.get_tool_definition()
+
+            assert definition["name"] == "get_course_outline"
+            assert "course_name" in definition["input_schema"]["properties"]
+            assert definition["input_schema"]["required"] == ["course_name"]
+
+    def test_outline_tool_execute_with_course(self, outline_tool):
+        """Test outline tool returns correct course structure"""
+        result = outline_tool.execute(course_name="Test Course")
+
+        # Check course info is present
+        assert "Test Course" in result
+        assert "https://example.com/course" in result
+        assert "Test Instructor" in result
+
+        # Check lessons are present
+        assert "Introduction" in result
+        assert "Getting Started" in result
+        assert "Advanced Topics" in result
+
+        # Check lesson links are present
+        assert "https://example.com/lesson0" in result
+        assert "https://example.com/lesson1" in result
+        assert "https://example.com/lesson2" in result
+
+        # Check sources are tracked
+        assert len(outline_tool.last_sources) == 1
+        assert "Test Course" in outline_tool.last_sources[0]
+
+    def test_outline_tool_execute_partial_match(self, outline_tool):
+        """Test outline tool works with partial course name"""
+        result = outline_tool.execute(course_name="Test")
+
+        # Should still find the course via semantic matching
+        assert "Test Course" in result
+        assert "Introduction" in result
+
+    def test_outline_tool_execute_not_found(self, tmp_path):
+        """Test outline tool handles empty store"""
+        from vector_store import VectorStore
+        from search_tools import CourseOutlineTool
+        from config import config
+
+        # Create an empty vector store (no courses)
+        empty_store = VectorStore(
+            chroma_path=str(tmp_path / "empty_chroma"),
+            embedding_model=config.EMBEDDING_MODEL,
+            max_results=config.MAX_RESULTS
+        )
+        empty_tool = CourseOutlineTool(empty_store)
+
+        result = empty_tool.execute(course_name="Any Course Name")
+        assert "No course found" in result
+
+    def test_outline_tool_integration(self, tmp_path):
+        """Test outline tool via tool manager"""
+        from vector_store import VectorStore
+        from search_tools import CourseOutlineTool, ToolManager
+        from models import Course, Lesson
+        from config import config
+
+        store = VectorStore(
+            chroma_path=str(tmp_path / "test_chroma"),
+            embedding_model=config.EMBEDDING_MODEL,
+            max_results=config.MAX_RESULTS
+        )
+
+        # Add test course
+        test_course = Course(
+            title="Integration Test Course",
+            course_link="https://example.com/integration",
+            instructor="Integration Instructor",
+            lessons=[
+                Lesson(lesson_number=0, title="Lesson Zero"),
+                Lesson(lesson_number=1, title="Lesson One", lesson_link="https://example.com/l1")
+            ]
+        )
+        store.add_course_metadata(test_course)
+
+        # Register tool
+        tool_manager = ToolManager()
+        outline_tool = CourseOutlineTool(store)
+        tool_manager.register_tool(outline_tool)
+
+        # Execute via manager
+        result = tool_manager.execute_tool("get_course_outline", course_name="Integration")
+
+        assert "Integration Test Course" in result
+        assert "Lesson Zero" in result
+        assert "Lesson One" in result
+
+        # Check sources are available
+        sources = tool_manager.get_last_sources()
+        assert len(sources) == 1
+
+
+class TestVectorStoreOutline:
+    """Test vector store outline functionality"""
+
+    @pytest.fixture
+    def vector_store_with_course(self, tmp_path):
+        """Create a test vector store with a sample course"""
+        from vector_store import VectorStore
+        from models import Course, Lesson
+        from config import config
+
+        store = VectorStore(
+            chroma_path=str(tmp_path / "test_chroma"),
+            embedding_model=config.EMBEDDING_MODEL,
+            max_results=config.MAX_RESULTS
+        )
+
+        test_course = Course(
+            title="Outline Test Course",
+            course_link="https://example.com/outline",
+            instructor="Outline Instructor",
+            lessons=[
+                Lesson(lesson_number=0, title="Intro"),
+                Lesson(lesson_number=1, title="Main Content", lesson_link="https://example.com/main")
+            ]
+        )
+        store.add_course_metadata(test_course)
+
+        return store
+
+    def test_get_course_outline(self, vector_store_with_course):
+        """Test get_course_outline returns correct structure"""
+        outline = vector_store_with_course.get_course_outline("Outline Test Course")
+
+        assert outline is not None
+        assert outline["title"] == "Outline Test Course"
+        assert outline["course_link"] == "https://example.com/outline"
+        assert outline["instructor"] == "Outline Instructor"
+        assert len(outline["lessons"]) == 2
+
+        # Check lesson structure
+        assert outline["lessons"][0]["lesson_number"] == 0
+        assert outline["lessons"][0]["lesson_title"] == "Intro"
+        assert outline["lessons"][1]["lesson_link"] == "https://example.com/main"
+
+    def test_get_course_outline_semantic_match(self, vector_store_with_course):
+        """Test get_course_outline with partial name"""
+        outline = vector_store_with_course.get_course_outline("Outline")
+
+        assert outline is not None
+        assert outline["title"] == "Outline Test Course"
+
+    def test_get_course_outline_not_found(self, tmp_path):
+        """Test get_course_outline returns None when store is empty"""
+        from vector_store import VectorStore
+        from config import config
+
+        # Create an empty vector store (no courses)
+        empty_store = VectorStore(
+            chroma_path=str(tmp_path / "empty_chroma"),
+            embedding_model=config.EMBEDDING_MODEL,
+            max_results=config.MAX_RESULTS
+        )
+
+        outline = empty_store.get_course_outline("Any Course Name")
+        assert outline is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

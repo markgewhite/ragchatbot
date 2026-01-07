@@ -54,16 +54,15 @@ App: http://localhost:8000 | API docs: http://localhost:8000/docs
 │  │    _handle_tool_execution()                               │         │    │
 │  │           │                                               │         │    │
 │  │           ▼                                               │         │    │
-│  │    tool_manager.execute_tool("search_course_content")     │         │    │
+│  │    tool_manager.execute_tool(tool_name, **input)          │         │    │
 │  │           │                                               │         │    │
 │  │           ▼                                               │         │    │
-│  │    search_tools.py: CourseSearchTool.execute()            │         │    │
+│  │    search_tools.py: Tool.execute()                        │         │    │
+│  │    ├─► CourseSearchTool → VectorStore.search()            │         │    │
+│  │    └─► CourseOutlineTool → VectorStore.get_course_outline │         │    │
 │  │           │                                               │         │    │
 │  │           ▼                                               │         │    │
-│  │    vector_store.py: VectorStore.search()                  │         │    │
-│  │           │                                               │         │    │
-│  │           ▼                                               │         │    │
-│  │    ChromaDB query ──► results                             │         │    │
+│  │    Results returned to Claude                             │         │    │
 │  │           │                                               │         │    │
 │  │           ▼                                               │         │    │
 │  │ 2nd Claude API call (without tools) ──► final answer ─────┼─────────┘    │
@@ -87,14 +86,24 @@ The system uses Claude's tool calling feature with a two-phase approach:
 - Build `tool_result` messages with matching `tool_use_id`
 - Call Claude API again WITHOUT tools to get final synthesized answer
 
+### Available Tools
+
+The system provides two tools for Claude to use (`search_tools.py`):
+
+| Tool | Purpose | Input | Output |
+|------|---------|-------|--------|
+| `search_course_content` | Search course materials for specific content | `query` (required), `course_name`, `lesson_number` | Formatted search results with sources |
+| `get_course_outline` | Get course structure and lesson list | `course_name` (required) | Course title, link, instructor, and all lessons with links |
+
 ### Tool Definition Schema
 
-Tools follow Anthropic's format (`search_tools.py:27-50`):
+Tools follow Anthropic's format:
 
+**CourseSearchTool** (`search_tools.py:27-50`):
 ```python
 {
     "name": "search_course_content",
-    "description": "...",
+    "description": "Search course materials with smart course name matching and lesson filtering",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -103,6 +112,21 @@ Tools follow Anthropic's format (`search_tools.py:27-50`):
             "lesson_number": {"type": "integer", "description": "..."}  # optional
         },
         "required": ["query"]
+    }
+}
+```
+
+**CourseOutlineTool** (`search_tools.py:136-151`):
+```python
+{
+    "name": "get_course_outline",
+    "description": "Get the complete outline of a course including title, course link, and all lessons",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "course_name": {"type": "string", "description": "Course title or partial name"}
+        },
+        "required": ["course_name"]
     }
 }
 ```
@@ -117,6 +141,8 @@ ChromaDB uses two collections (`vector_store.py:51-52`):
 | `course_content` | Chunked course text for semantic search | `{course_title}_{chunk_index}` |
 
 **Course name resolution**: When user provides a partial course name, `_resolve_course_name()` does a semantic search against `course_catalog` to find the best matching course title, which is then used to filter `course_content`.
+
+**Course outline retrieval**: `get_course_outline(course_name)` (`vector_store.py:268-306`) returns full course metadata including title, link, instructor, and parsed lesson list with links. Uses semantic matching for partial course names.
 
 ### Data Models (`models.py`)
 
