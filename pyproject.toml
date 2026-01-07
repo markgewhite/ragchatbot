@@ -18,6 +18,7 @@ dependencies = [
 dev = [
     "pytest>=9.0.2",
     "httpx>=0.28.0",
+    "black>=24.0.0",
 ]
 
 [tool.pytest.ini_options]
@@ -31,3 +32,16 @@ filterwarnings = [
     "ignore::UserWarning",
     "ignore:resource_tracker::",
 ]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | __pycache__
+    | chroma_db
+)/
+'''
