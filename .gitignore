@@ -30,6 +30,9 @@ uploads/
 *.swp
 *.swo
 
+# Testing
+.playwright-mcp/
+
 # OS
 .DS_Store
 Thumbs.db
