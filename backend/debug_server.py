@@ -1,4 +1,5 @@
 """Debug entry point for PyCharm - right-click and select 'Debug'"""
+
 import uvicorn
 
 if __name__ == "__main__":
