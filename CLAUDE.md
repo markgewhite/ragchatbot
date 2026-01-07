@@ -47,44 +47,66 @@ App: http://localhost:8000 | API docs: http://localhost:8000/docs
 │                                          │                             │    │
 │  ai_generator.py                         ▼                             │    │
 │  ┌───────────────────────────────────────────────────────────┐         │    │
-│  │ 1st Claude API call (with tools)                          │         │    │
-│  │    └─► stop_reason == "tool_use"?                         │         │    │
-│  │           │                                               │         │    │
-│  │           ▼ Yes                                           │         │    │
-│  │    _handle_tool_execution()                               │         │    │
-│  │           │                                               │         │    │
-│  │           ▼                                               │         │    │
-│  │    tool_manager.execute_tool(tool_name, **input)          │         │    │
-│  │           │                                               │         │    │
-│  │           ▼                                               │         │    │
-│  │    search_tools.py: Tool.execute()                        │         │    │
-│  │    ├─► CourseSearchTool → VectorStore.search()            │         │    │
-│  │    └─► CourseOutlineTool → VectorStore.get_course_outline │         │    │
-│  │           │                                               │         │    │
-│  │           ▼                                               │         │    │
-│  │    Results returned to Claude                             │         │    │
-│  │           │                                               │         │    │
-│  │           ▼                                               │         │    │
-│  │ 2nd Claude API call (without tools) ──► final answer ─────┼─────────┘    │
+│  │ Sequential Tool Calling Loop (up to 2 rounds)             │         │    │
+│  │                                                           │         │    │
+│  │ LOOP: while round < MAX_TOOL_ROUNDS (2)                   │         │    │
+│  │    │                                                      │         │    │
+│  │    ├─► Claude API call (with tools)                       │         │    │
+│  │    │      │                                               │         │    │
+│  │    │      ├─► stop_reason == "end_turn" ──► return text   │         │    │
+│  │    │      │                                               │         │    │
+│  │    │      └─► stop_reason == "tool_use"                   │         │    │
+│  │    │             │                                        │         │    │
+│  │    │             ▼                                        │         │    │
+│  │    │      _execute_tools() via tool_manager               │         │    │
+│  │    │      ├─► CourseSearchTool → VectorStore.search()     │         │    │
+│  │    │      └─► CourseOutlineTool → get_course_outline      │         │    │
+│  │    │             │                                        │         │    │
+│  │    │             ▼                                        │         │    │
+│  │    │      Append tool results to messages                 │         │    │
+│  │    │             │                                        │         │    │
+│  │    └─────────────┴─► round++ and continue loop            │         │    │
+│  │                                                           │         │    │
+│  │ After loop: final API call (no tools) ──► answer ─────────┼─────────┘    │
 │  └───────────────────────────────────────────────────────────┘              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Tool Calling Pattern (Agentic Loop)
+### Tool Calling Pattern (Sequential Agentic Loop)
 
-The system uses Claude's tool calling feature with a two-phase approach:
+The system uses Claude's tool calling feature with a **sequential loop** supporting up to 2 tool rounds per query. This enables complex queries where one tool's results inform the next search.
 
-**Phase 1** (`ai_generator.py:79-84`):
-- Call Claude API with `tools` and `tool_choice: {"type": "auto"}`
-- Claude decides whether to use tools based on the query
-- If `response.stop_reason == "tool_use"`, proceed to Phase 2
-- If `response.stop_reason == "end_turn"`, return response directly
+**Loop Structure** (`ai_generator.py:51-127`):
 
-**Phase 2** (`ai_generator.py:89-135`):
-- Extract tool calls from `response.content` (type `tool_use`)
-- Execute each tool via `tool_manager.execute_tool(name, **input)`
-- Build `tool_result` messages with matching `tool_use_id`
-- Call Claude API again WITHOUT tools to get final synthesized answer
+```
+while round_count < MAX_TOOL_ROUNDS (2):
+    1. Call Claude API with tools and tool_choice: {"type": "auto"}
+    2. Check stop_reason:
+       - "end_turn" or "max_tokens" → extract text and return
+       - "tool_use" → execute tools, append results to messages, round++
+    3. Continue loop
+
+After loop exhausted → final API call WITHOUT tools to synthesize answer
+```
+
+**Key Methods**:
+- `generate_response()`: Main entry point with sequential tool calling loop
+- `_execute_tools()`: Execute all tool calls, returns (results, has_error)
+- `_extract_text_response()`: Handle mixed text/tool_use content blocks
+- `_final_call_without_tools()`: Synthesis call after max rounds or errors
+
+**Termination Conditions**:
+1. Claude returns `stop_reason == "end_turn"` (natural completion)
+2. Maximum rounds reached (`MAX_TOOL_ROUNDS = 2`)
+3. Tool execution error (graceful degradation with final call)
+
+**Example Multi-Round Query**:
+```
+User: "Find courses similar to lesson 3 of the RAG course"
+Round 1: Claude calls get_course_outline(course_name="RAG") → gets lesson titles
+Round 2: Claude calls search_course_content(query="<lesson 3 title>") → finds similar courses
+Final: Claude synthesizes answer from accumulated tool results
+```
 
 ### Available Tools
 
@@ -208,17 +230,18 @@ Lesson 1: [title]
 ...
 ```
 
-### Configuration (`config.py`)
+### Configuration (`config.py` and `ai_generator.py`)
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `ANTHROPIC_MODEL` | claude-sonnet-4-20250514 | Claude model for responses |
-| `EMBEDDING_MODEL` | all-MiniLM-L6-v2 | Sentence transformer for embeddings |
-| `CHUNK_SIZE` | 800 | Characters per chunk |
-| `CHUNK_OVERLAP` | 100 | Overlap between chunks |
-| `MAX_RESULTS` | 5 | Search results returned |
-| `MAX_HISTORY` | 2 | Conversation turns remembered |
-| `CHROMA_PATH` | ./chroma_db | Vector DB storage |
+| Setting | Default | Location | Purpose |
+|---------|---------|----------|---------|
+| `ANTHROPIC_MODEL` | claude-sonnet-4-20250514 | config.py | Claude model for responses |
+| `EMBEDDING_MODEL` | all-MiniLM-L6-v2 | config.py | Sentence transformer for embeddings |
+| `CHUNK_SIZE` | 800 | config.py | Characters per chunk |
+| `CHUNK_OVERLAP` | 100 | config.py | Overlap between chunks |
+| `MAX_RESULTS` | 5 | config.py | Search results returned |
+| `MAX_HISTORY` | 2 | config.py | Conversation turns remembered |
+| `CHROMA_PATH` | ./chroma_db | config.py | Vector DB storage |
+| `MAX_TOOL_ROUNDS` | 2 | ai_generator.py | Sequential tool calling rounds per query |
 
 Environment: `ANTHROPIC_API_KEY` required in `.env` file.
 

@@ -382,5 +382,237 @@ class TestVectorStoreOutline:
         assert outline is None
 
 
+class TestAIGeneratorSequentialToolCalling:
+    """Test AI generator sequential tool calling functionality"""
+
+    @pytest.fixture
+    def mock_anthropic_client(self):
+        """Create a mock Anthropic client"""
+        return MagicMock()
+
+    @pytest.fixture
+    def ai_generator(self, mock_anthropic_client):
+        """Create an AIGenerator with mocked client"""
+        from ai_generator import AIGenerator
+
+        generator = AIGenerator(api_key="test-key", model="test-model")
+        generator.client = mock_anthropic_client
+        return generator
+
+    @pytest.fixture
+    def mock_tool_manager(self):
+        """Create a mock tool manager"""
+        manager = MagicMock()
+        manager.execute_tool.return_value = "Tool result content"
+        return manager
+
+    def _create_mock_response(self, stop_reason, content_blocks):
+        """Helper to create mock API responses"""
+        response = MagicMock()
+        response.stop_reason = stop_reason
+        response.content = content_blocks
+        return response
+
+    def _create_text_block(self, text):
+        """Create a mock text content block"""
+        block = MagicMock()
+        block.type = "text"
+        block.text = text
+        return block
+
+    def _create_tool_use_block(self, tool_id, name, input_data):
+        """Create a mock tool_use content block"""
+        block = MagicMock(spec=['type', 'id', 'name', 'input'])
+        block.type = "tool_use"
+        block.id = tool_id
+        block.name = name
+        block.input = input_data
+        return block
+
+    def test_direct_response_no_tools(self, ai_generator, mock_anthropic_client):
+        """Test that direct responses work without tool calls"""
+        # Setup: Claude returns text directly
+        text_block = self._create_text_block("Direct answer")
+        mock_response = self._create_mock_response("end_turn", [text_block])
+        mock_anthropic_client.messages.create.return_value = mock_response
+
+        # Execute
+        result = ai_generator.generate_response("What is 2+2?")
+
+        # Verify
+        assert result == "Direct answer"
+        assert mock_anthropic_client.messages.create.call_count == 1
+
+    def test_single_tool_call_round(self, ai_generator, mock_anthropic_client, mock_tool_manager):
+        """Test single round of tool calling"""
+        # Setup: First call returns tool_use, second returns text
+        tool_block = self._create_tool_use_block("tool-1", "search_course_content", {"query": "test"})
+        tool_response = self._create_mock_response("tool_use", [tool_block])
+
+        text_block = self._create_text_block("Final answer after tool")
+        final_response = self._create_mock_response("end_turn", [text_block])
+
+        mock_anthropic_client.messages.create.side_effect = [tool_response, final_response]
+
+        # Execute
+        result = ai_generator.generate_response(
+            "Search for test",
+            tools=[{"name": "search_course_content"}],
+            tool_manager=mock_tool_manager
+        )
+
+        # Verify
+        assert result == "Final answer after tool"
+        assert mock_anthropic_client.messages.create.call_count == 2
+        mock_tool_manager.execute_tool.assert_called_once_with("search_course_content", query="test")
+
+    def test_two_sequential_tool_rounds(self, ai_generator, mock_anthropic_client, mock_tool_manager):
+        """Test two sequential rounds of tool calling"""
+        # Setup responses for: tool_use -> tool_use -> end_turn
+        tool_block_1 = self._create_tool_use_block("tool-1", "get_course_outline", {"course_name": "Test"})
+        tool_response_1 = self._create_mock_response("tool_use", [tool_block_1])
+
+        tool_block_2 = self._create_tool_use_block("tool-2", "search_course_content", {"query": "topic"})
+        tool_response_2 = self._create_mock_response("tool_use", [tool_block_2])
+
+        text_block = self._create_text_block("Final answer after two tools")
+        final_response = self._create_mock_response("end_turn", [text_block])
+
+        mock_anthropic_client.messages.create.side_effect = [
+            tool_response_1,
+            tool_response_2,
+            final_response
+        ]
+
+        # Execute
+        result = ai_generator.generate_response(
+            "Find courses similar to Test course lesson 1",
+            tools=[{"name": "get_course_outline"}, {"name": "search_course_content"}],
+            tool_manager=mock_tool_manager
+        )
+
+        # Verify
+        assert result == "Final answer after two tools"
+        assert mock_anthropic_client.messages.create.call_count == 3
+        assert mock_tool_manager.execute_tool.call_count == 2
+
+    def test_max_rounds_limit_enforced(self, ai_generator, mock_anthropic_client, mock_tool_manager):
+        """Test that MAX_TOOL_ROUNDS limit is enforced"""
+        # Setup: Claude keeps requesting tools beyond limit
+        tool_block = self._create_tool_use_block("tool-1", "search_course_content", {"query": "test"})
+        tool_response = self._create_mock_response("tool_use", [tool_block])
+
+        text_block = self._create_text_block("Final synthesis")
+        final_response = self._create_mock_response("end_turn", [text_block])
+
+        # Return tool_use for MAX_TOOL_ROUNDS times, then the final response is forced
+        mock_anthropic_client.messages.create.side_effect = [
+            tool_response,  # Round 1
+            tool_response,  # Round 2 (max)
+            final_response  # Final call without tools
+        ]
+
+        # Execute
+        result = ai_generator.generate_response(
+            "Keep searching",
+            tools=[{"name": "search_course_content"}],
+            tool_manager=mock_tool_manager
+        )
+
+        # Verify: Should have 3 API calls (2 with tools, 1 final without tools)
+        assert result == "Final synthesis"
+        assert mock_anthropic_client.messages.create.call_count == 3
+        assert mock_tool_manager.execute_tool.call_count == 2
+
+        # Verify final call was made without tools
+        final_call_args = mock_anthropic_client.messages.create.call_args_list[-1]
+        assert "tools" not in final_call_args.kwargs
+
+    def test_tool_execution_error_triggers_final_call(self, ai_generator, mock_anthropic_client, mock_tool_manager):
+        """Test that tool execution error triggers graceful degradation"""
+        # Setup: Tool execution raises exception
+        tool_block = self._create_tool_use_block("tool-1", "search_course_content", {"query": "test"})
+        tool_response = self._create_mock_response("tool_use", [tool_block])
+
+        text_block = self._create_text_block("Response after error")
+        final_response = self._create_mock_response("end_turn", [text_block])
+
+        mock_anthropic_client.messages.create.side_effect = [tool_response, final_response]
+        mock_tool_manager.execute_tool.side_effect = Exception("Tool failed")
+
+        # Execute
+        result = ai_generator.generate_response(
+            "Search something",
+            tools=[{"name": "search_course_content"}],
+            tool_manager=mock_tool_manager
+        )
+
+        # Verify: Should get response after graceful degradation
+        assert result == "Response after error"
+        assert mock_anthropic_client.messages.create.call_count == 2
+
+    def test_messages_accumulate_across_rounds(self, ai_generator, mock_anthropic_client, mock_tool_manager):
+        """Test that messages accumulate correctly across tool rounds"""
+        # Setup
+        tool_block_1 = self._create_tool_use_block("tool-1", "get_course_outline", {"course_name": "Test"})
+        tool_response_1 = self._create_mock_response("tool_use", [tool_block_1])
+
+        text_block = self._create_text_block("Final answer")
+        final_response = self._create_mock_response("end_turn", [text_block])
+
+        mock_anthropic_client.messages.create.side_effect = [tool_response_1, final_response]
+
+        # Execute
+        ai_generator.generate_response(
+            "Original query",
+            tools=[{"name": "get_course_outline"}],
+            tool_manager=mock_tool_manager
+        )
+
+        # Verify second call has accumulated messages
+        second_call_args = mock_anthropic_client.messages.create.call_args_list[1]
+        messages = second_call_args.kwargs["messages"]
+
+        # Should have: user query, assistant tool_use, user tool_result
+        assert len(messages) == 3
+        assert messages[0]["role"] == "user"
+        assert messages[0]["content"] == "Original query"
+        assert messages[1]["role"] == "assistant"
+        assert messages[2]["role"] == "user"
+
+    def test_extract_text_from_mixed_response(self, ai_generator):
+        """Test _extract_text_response handles mixed content blocks"""
+        # Create response with text and tool_use blocks
+        text_block = self._create_text_block("Some text")
+        tool_block = self._create_tool_use_block("tool-1", "test", {})
+        text_block_2 = self._create_text_block("More text")
+
+        response = self._create_mock_response("end_turn", [text_block, tool_block, text_block_2])
+
+        # Execute
+        result = ai_generator._extract_text_response(response)
+
+        # Verify: Only text blocks are extracted
+        assert "Some text" in result
+        assert "More text" in result
+
+    def test_no_tools_provided_returns_direct_response(self, ai_generator, mock_anthropic_client):
+        """Test behavior when no tools are provided"""
+        text_block = self._create_text_block("Direct answer")
+        mock_response = self._create_mock_response("end_turn", [text_block])
+        mock_anthropic_client.messages.create.return_value = mock_response
+
+        # Execute without tools
+        result = ai_generator.generate_response("Question", tools=None)
+
+        # Verify
+        assert result == "Direct answer"
+        assert mock_anthropic_client.messages.create.call_count == 1
+
+        # Verify no tools in API call
+        call_args = mock_anthropic_client.messages.create.call_args
+        assert "tools" not in call_args.kwargs
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
