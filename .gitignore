@@ -19,7 +19,8 @@ backend/chroma_db/
 chroma_db/
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/commands/
 
 # Uploads
 uploads/
