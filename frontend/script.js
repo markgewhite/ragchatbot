@@ -5,7 +5,7 @@ const API_URL = '/api';
 let currentSessionId = null;
 
 // DOM elements
-let chatMessages, chatInput, sendButton, totalCourses, courseTitles, newChatBtn;
+let chatMessages, chatInput, sendButton, totalCourses, courseTitles, newChatBtn, themeToggle;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -16,14 +16,66 @@ document.addEventListener('DOMContentLoaded', () => {
     totalCourses = document.getElementById('totalCourses');
     courseTitles = document.getElementById('courseTitles');
     newChatBtn = document.getElementById('newChatBtn');
+    themeToggle = document.getElementById('themeToggle');
 
+    initializeTheme();
     setupEventListeners();
     createNewSession();
     loadCourseStats();
 });
 
+// Theme Functions
+function initializeTheme() {
+    // Check for saved theme preference or system preference
+    const savedTheme = localStorage.getItem('theme');
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+    // Apply saved theme or default to system preference (dark if no preference)
+    const theme = savedTheme || (systemPrefersDark ? 'dark' : 'light');
+    setTheme(theme);
+
+    // Listen for system theme changes
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+        if (!localStorage.getItem('theme')) {
+            setTheme(e.matches ? 'dark' : 'light');
+        }
+    });
+}
+
+function setTheme(theme) {
+    if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+    } else {
+        document.documentElement.removeAttribute('data-theme');
+    }
+
+    // Update ARIA label for accessibility
+    if (themeToggle) {
+        const currentTheme = theme === 'light' ? 'light' : 'dark';
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        themeToggle.setAttribute('aria-label', `Switch to ${newTheme} theme (currently ${currentTheme})`);
+    }
+}
+
+function toggleTheme() {
+    const isLight = document.documentElement.hasAttribute('data-theme');
+    const newTheme = isLight ? 'dark' : 'light';
+
+    setTheme(newTheme);
+    localStorage.setItem('theme', newTheme);
+}
+
 // Event Listeners
 function setupEventListeners() {
+    // Theme toggle - click and keyboard support
+    themeToggle.addEventListener('click', toggleTheme);
+    themeToggle.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleTheme();
+        }
+    });
+
     // Chat functionality
     sendButton.addEventListener('click', sendMessage);
     chatInput.addEventListener('keypress', (e) => {
