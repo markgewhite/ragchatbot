@@ -5,12 +5,55 @@
     padding: 0;
 }
 
-/* Theme Toggle Button */
+/* Header Banner */
+.banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem 2rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+.banner-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.banner-content h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.banner-content .subtitle {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    margin: 0;
+    line-height: 1.5;
+    max-width: 800px;
+}
+
+.banner-content .learn-more {
+    display: inline-block;
+    font-size: 0.875rem;
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 600;
+    transition: color 0.2s ease;
+}
+
+.banner-content .learn-more:hover {
+    color: var(--primary-hover);
+    text-decoration: underline;
+}
+
+/* Theme Toggle Button (in Banner) */
 .theme-toggle {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
-    z-index: 1000;
     width: 44px;
     height: 44px;
     border-radius: 50%;
@@ -23,6 +66,8 @@
     justify-content: center;
     transition: all 0.3s ease;
     box-shadow: var(--shadow);
+    flex-shrink: 0;
+    margin-left: 1rem;
 }
 
 .theme-toggle:hover {
@@ -112,6 +157,7 @@
 /* Smooth theme transition on all elements */
 body,
 .container,
+.banner,
 .sidebar,
 .chat-main,
 .chat-container,
@@ -149,26 +195,6 @@ body {
     padding: 0;
 }
 
-/* Header - Hidden */
-header {
-    display: none;
-}
-
-header h1 {
-    font-size: 1.75rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin: 0;
-}
-
-.subtitle {
-    font-size: 0.95rem;
-    color: var(--text-secondary);
-    margin-top: 0.5rem;
-}
 
 /* Main Content Area with Sidebar */
 .main-content {
@@ -777,10 +803,31 @@ details[open] .suggested-header::before {
 
 /* Responsive Design */
 @media (max-width: 768px) {
+    .banner {
+        padding: 1rem;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    .banner-content h1 {
+        font-size: 1.5rem;
+    }
+
+    .banner-content .subtitle {
+        font-size: 0.875rem;
+    }
+
+    .theme-toggle {
+        align-self: flex-end;
+        margin-left: 0;
+        margin-top: -2.5rem;
+    }
+
     .main-content {
         flex-direction: column;
     }
-    
+
     .sidebar {
         width: 100%;
         border-right: none;
@@ -810,15 +857,7 @@ details[open] .suggested-header::before {
     .chat-main {
         order: 1;
     }
-    
-    header {
-        padding: 1rem;
-    }
-    
-    header h1 {
-        font-size: 1.5rem;
-    }
-    
+
     .chat-messages {
         padding: 1rem;
     }
